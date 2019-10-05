@@ -1,0 +1,494 @@
+<head>
+    <style>
+    body {
+        border: 0;
+    }
+    canvas {
+        width: 100vw;
+        height: 100vh;
+        display: block;
+    }
+    </style>
+    <script type="not-javascript" id="vertex-shader">
+        attribute vec3 coordinates;
+        void main() {
+            gl_Position = vec4(coordinates, 1.0);
+        }
+    </script>
+       
+    <script type="not-javascript" id="fragment-shader">
+        #ifdef GL_ES
+            precision highp float; 
+        #endif
+        #define PI 3.1415926538
+
+        uniform float anim;
+        uniform float tick;
+        uniform float nticks;
+        uniform float nclicks;
+        uniform float score;
+        uniform int can_click;
+        uniform vec2 resolution;
+        uniform vec2 mouse;
+
+        vec3 hsv2rgb(vec3 c) {
+            vec4 k = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+            vec3 p = abs(fract(c.xxx + k.xyz) * 6.0 - k.www);
+            return c.z * mix(k.xxx, clamp(p - k.xxx, 0.0, 1.0), c.y);
+        }
+
+        vec2 opRepeat(vec2 p, vec2 dom) {
+            return mod(p+0.5*dom, dom)-0.5*dom;
+        }
+
+        float opUnion(float d1, float d2) {
+            return min(d1, d2);
+        }
+
+        float opSub(float d1, float d2) {
+            return max(-d2, d1);
+        }
+
+        float opInter(float d1, float d2) {
+            return max(d1, d2);
+        }
+
+        float opSmoothUnion(float d1, float d2, float k) {
+            float h = clamp(0.5 + 0.5*(d2-d1)/k, 0.0, 1.0);
+            return mix(d2, d1, h) - k*h*(1.0-h);
+        }
+
+        float opSmoothSubtraction(float d1, float d2, float k) {
+            float h = clamp(0.5 - 0.5*(d2+d1)/k, 0.0, 1.0);
+            return mix(d2, -d1, h) + k*h*(1.0-h);
+        }
+
+        float opSmoothIntersection(float d1, float d2, float k) {
+            float h = clamp(0.5 - 0.5*(d2-d1)/k, 0.0, 1.0);
+            return mix(d2, d1, h) + k*h*(1.0-h);
+        }
+
+        vec2 opRot(vec2 p, float r) {
+            float c = cos(r);
+            float s = sin(r);
+            return vec2(
+                p.x * c - p.y * s,
+                p.x * s + p.y * c);
+        }
+
+        vec2 opOff(vec2 p, vec2 o) {
+            return p - o;
+        }
+
+        float hexagramSDF(vec2 p, float r) {
+            const vec4 k = vec4(-0.5, 0.8660254038,0.5773502692,1.7320508076);
+            vec2 j = abs(p);
+            j -= 2.0*min(dot(k.xy,j),0.0)*k.xy;
+            j -= 2.0*min(dot(k.yx,j),0.0)*k.yx;
+            j -= vec2(clamp(j.x,r*k.z,r*k.w),r);
+            return length(j)*sign(j.y);
+        }
+
+        float pentagonSDF(vec2 p, float r) {
+            const vec3 k = vec3(0.809016994, 0.587785252, 0.726542528);
+            vec2 j = vec2(p);
+            j.x = abs(j.x);
+            j -= 2.0*min(dot(vec2(-k.x,k.y),j),0.0)*vec2(-k.x,k.y);
+            j -= 2.0*min(dot(vec2(k.x,k.y),j),0.0)*vec2(k.x,k.y);
+            j -= vec2(clamp(p.x,-r*k.z,r*k.z),r);
+            return length(j)*sign(j.y);
+        }
+
+        float octagonSDF(vec2 p, float r) {
+            const vec3 k = vec3(-0.9238795325, 0.3826834323, 0.4142135623);
+            vec2 j = abs(p);
+            j -= 2.0*min(dot(vec2(k.x,k.y),j),0.0)*vec2(k.x,k.y);
+            j -= 2.0*min(dot(vec2(-k.x,k.y),j),0.0)*vec2(-k.x,k.y);
+            j -= vec2(clamp(j.x, -k.z*r, k.z*r), r);
+            return length(j)*sign(j.y);
+        }
+
+        float circleSDF(vec2 p, float r) {
+            return length(p) - r;
+        }
+
+        float vesicaSDF(vec2 p, float r, float d) {
+            vec2 j = abs(p);
+            float b = sqrt(r*r - d*d);
+            if ((j.y-b)*d > j.x*b) {
+                return length(j-vec2(0.0,b));
+            } else {
+                return length(j-vec2(-d,0.0))-r;
+            }
+        }
+
+        float vesicaAnularSDF(vec2 p, float r, float d, float o) {
+            return abs(vesicaSDF(p, r, d)) - o;
+        }
+
+        float crossSDF(vec2 p, vec2 b, float r) {
+            vec2 j = abs(p);
+            j = (j.y > j.x) ? j.yx : j.xy;
+            vec2 q = j - b;
+            float k = max(q.y, q.x);
+            vec2 w = (k>0.0) ? q : vec2(b.y-j.x,-k);
+            return sign(k) * length(max(w, 0.0)) + r;
+        }
+
+        vec3 scene1(vec2 p, float score) {
+            float bsize = score;
+            float asin = abs(sin(anim*2.0*PI));
+            float theta = ((2.0*PI)/8.0)*anim;
+            float sheta = ((2.0*PI)/6.0)*tick;
+            theta *= mod(nclicks, 2.0) == 0.0 ? 1.0 : -1.0;
+            float star = hexagramSDF(
+                opRot(
+                    opRepeat(p,vec2(0.5,0.5)), 
+                    sheta),
+                0.0125);
+
+            float d = opUnion(
+                opSub(
+                    octagonSDF(opRot(p, -theta), bsize*3.0),
+                    octagonSDF(opRot(p, theta), bsize*1.5)),
+                octagonSDF(opRot(p, -theta), bsize));
+
+            d = opSmoothUnion(star, d, 0.25);
+
+            if (d > 0.0) {
+                return vec3(1.0, 1.0, 1.0);
+            } else if (length(p) <= bsize) {
+                return vec3(0.0, 0.0, 0.0);
+            } else {
+                return hsv2rgb(vec3(
+                    abs(sin(score*10.0)) + (d*0.25), 
+                    0.5 - (d*0.015), 
+                    0.8 - asin*0.125));
+            }
+        }
+
+        vec3 scene2(vec2 p, float score) {
+            float t = score*2.0;
+            float tsin = sin(tick*2.0*PI);
+            float asin = sin(anim*2.0*PI);
+            vec2 eye_pos_left  = opOff(p, vec2(-0.45, 0.0));
+            vec2 eye_pos_right = opOff(p, vec2(0.45, 0.0));
+
+            float eye_left  = circleSDF(eye_pos_left, t);
+            float eye_right = circleSDF(eye_pos_right, t);
+
+            float pupil_left = circleSDF(
+                eye_pos_left, 
+                t*tsin*(can_click > 0  ? 0.25 : 0.1));
+            float pupil_right = circleSDF(
+                eye_pos_right, 
+                t*tsin*(can_click > 0 ? 0.25 : 0.1));
+
+            vec2 ves_pos = opOff(opRot(p, PI/2.0), vec2(0.5, 0));
+
+            float mouth = vesicaAnularSDF(
+                ves_pos, 
+                min(score*8.0, 1.0), 
+                0.8 - 0.1*asin, 
+                0.125+0.01*tsin);
+            float crag = vesicaSDF(p, max(score - 0.5, 0.0)*16.0, 0.8);
+
+            float d = opUnion(
+                mouth,
+                opUnion(
+                    opSub(eye_left, pupil_left),
+                    opSub(eye_right, pupil_right)));
+
+            float fin = opSub(d, crag);
+            return hsv2rgb(vec3(
+                fin+anim*0.025+tick*0.001, 
+                0.5, 
+                fin < 0.0 ? abs(fin*5.0)*0.75 : 0.0));
+        }
+
+        vec3 scene3(vec2 p, float score) {
+            float theta = 2.0*PI*tick;
+            float tsin = abs(sin(theta));
+            float s = 1.0 - score;
+            float dir = mod(nticks, 4.0);
+            vec2 off = vec2(0.0,0.0);
+            float r = 0.0;
+            float h = 0.0;
+            if (dir == 0.0) {
+                off.y = -1.0;
+                r = 1.0;
+            } else if(dir == 1.0) {
+                h = 0.125;
+                off.x = 1.0;
+            } else if(dir == 2.0) {
+                h = 0.25;
+                off.y = 1.0;
+                r = -1.0;
+            } else if(dir == 3.0) {
+                h = 0.5;
+                off.x = -1.0;
+            }
+            vec2 o = opOff(
+                p,
+                off*tick*2.0*s);
+
+            o = opRot(o,r*tick*PI*0.5);
+            float star_a = octagonSDF(
+                opRepeat(o, vec2(0.25*s, 0.25*s)),
+                0.05*s);
+
+            float star_b = hexagramSDF(
+                opRepeat(o, vec2(s, s)),
+                0.08*s);
+
+            float star_c = hexagramSDF(
+                opRepeat(o, vec2(0.5*s, 0.5*s)),
+                0.03*s);
+
+            float d = opSmoothUnion(
+                star_a,
+                opSmoothSubtraction(
+                    star_b,
+                    star_c,
+                    0.25),
+                0.125 + anim/9.0 + tsin/32.0);
+
+            if (d < 0.0) {
+                return hsv2rgb(vec3(h, 0.55, 0.6));
+            } else {
+                return vec3(0.0);
+            }
+        }
+
+        vec3 scene4(vec2 p, float score) {
+            float seek = pow(score, 3.0);
+            float x    = sin(seek*8.0*PI);
+            vec2 pos = opOff(p, vec2(x, 0.0));
+            pos = opRot(pos, seek*PI*6.0);
+            float c1 = crossSDF(
+                pos, 
+                vec2(0.6, 1.0 - 0.25*seek*2.0), 
+                0.01);
+
+            float c2 = crossSDF(
+                opRot(pos, PI/4.0), 
+                vec2(0.6,1.0 - 0.25*seek*2.0), 
+                0.01);
+
+            float d = opSmoothUnion(c1, c2, 0.125);
+            if (d < 0.0) {
+                return hsv2rgb(vec3(mod(d, 0.2), 0.75, 0.75));
+            } else {
+                return vec3(0.0);
+            }
+        }
+
+        vec3 sceneSDF(vec2 p) {
+            if (score <= 1.3) {
+                return scene1(p, score);
+            } else if (score <= 2.0) {
+                return scene2(p, score - 1.3);
+            } else if (score <= 3.0) {
+                return scene3(p, score - 2.0);
+            } else {
+                return scene4(p, score - 3.0);
+            }
+        }
+
+        vec3 mouseAnim(vec2 p, vec2 m) {
+            vec2 np = opOff(p, m);
+            float mrad = 0.25;
+            float outer = circleSDF(np, mrad);
+            float inner = circleSDF(np, mrad - mrad*anim);
+            float d = opSub(outer, inner);
+            if (d < 0.0) {
+                return vec3(1.0) - gl_FragColor.xyz;
+            } else {
+                return gl_FragColor.xyz;
+            }
+        }
+
+        void main() {
+            vec2 coord = (gl_FragCoord.xy/resolution.xy)*2.0-1.0;
+            vec2 mcoord = (mouse/resolution.xy)*2.0-1.0;
+            float aspect = resolution.x/resolution.y;
+            coord.x *= aspect; 
+            mcoord.x *= aspect;
+            mcoord.y *= -1.0;
+            gl_FragColor = vec4(sceneSDF(coord), 1.0);
+            gl_FragColor = vec4(mouseAnim(coord, mcoord), 1.0);
+        }
+    </script>
+
+    <script id="graphics">
+        var program, canvas, gl, buffer, res_loc, score_loc, coord_loc,
+            anim_loc, can_click_loc, mouse_loc, start_time, cur_time, date_o;
+
+        var nticks = 0;
+        var nclicks = 0;
+        var clock = 0;
+        var ticks = 0;
+        var clicks = 0;
+        var last_tick = 0;
+        var tick_dur = 120;
+        var tick_size = 100;
+        var click_size = 1;
+        var last_click = 0;
+        var click_dur = 10;
+        var tick_mod = 1/10000.0;
+        var click_mod = 1/100.0;
+        var mouse = [0,0];
+        function compileShader(gl, shaderSource, shaderType) {
+            var shader = gl.createShader(shaderType);
+            gl.shaderSource(shader, shaderSource);
+            gl.compileShader(shader);
+            var success = gl.getShaderParameter(shader, gl.COMPILE_STATUS);
+            if(!success) {
+                throw("could not compile shader:"+gl.getShaderInfoLog(shader));
+            }
+
+            return shader;
+        }
+
+        function createProgram(gl, vertexShader, fragmentShader) {
+            program = gl.createProgram();
+            gl.attachShader(program, vertexShader);
+            gl.attachShader(program, fragmentShader);
+            gl.linkProgram(program);
+            var success = gl.getProgramParameter(program, gl.LINK_STATUS);
+            if (!success) {
+                throw("program failed to link:"+gl.getProgramInfoLog(program));
+            }
+
+            return program;
+        }
+
+        function spawnShader(gl, vertexSource, fragmentSource) {
+            return createProgram(
+                gl,
+                compileShader(gl, vertexSource, gl.VERTEX_SHADER),
+                compileShader(gl, fragmentSource, gl.FRAGMENT_SHADER));
+
+        }
+
+        function ease(t) {
+            return t<.5 ? 4*t*t*t : (t-1) * (2*t-2) * (2*t-2) + 1;
+        }
+
+        function easeOut(t) {
+            return 1+(--t)*t*t*t*t;
+        }
+        function animate(t) {
+            var width = canvas.clientWidth;
+            var height = canvas.clientHeight;
+            if (canvas.width != width || canvas.height != height) {
+                canvas.width = width;
+                canvas.height = height;
+                gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+            }
+
+            clock += 1;
+
+            if (clock >= last_tick + tick_dur) {
+                ticks += tick_size;
+                last_tick = clock;
+                nticks += 1;
+            }
+
+           var click_pos = easeOut(Math.min(1, (clock - last_click)/click_dur));
+            var tick_pos = ease(Math.min(1, (clock - last_tick)/tick_dur));
+
+            var click_anim = (clicks - click_size) + click_size * click_pos;
+            var tick_anim = (ticks - tick_size) + tick_size * tick_pos;
+            var circs = new Float32Array([
+                0, 0, 0.015, 0,
+                0, 1, 0.015, 0,
+                1, 1, 0.015, 0,
+                1, 0, 0.015, 0
+            ]);
+
+            gl.useProgram(program);
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+            gl.vertexAttribPointer(coord_loc, 2, gl.FLOAT, false, 0, 0);
+            gl.enableVertexAttribArray(coord_loc);
+            gl.uniform2f(res_loc, canvas.width, canvas.height);
+            gl.uniform1f(
+                score_loc, 
+                (tick_anim * tick_mod) + (click_anim * click_mod));
+
+            var can_click;
+            if (clock >= last_click + click_dur) {
+                can_click = 1;
+                canvas.style.cursor = "pointer";
+            } else {
+                can_click = 0;
+                canvas.style.cursor = "auto";
+            }
+            gl.uniform1i(can_click_loc, can_click);
+            gl.uniform1f(anim_loc, 1-click_pos);
+            gl.uniform1f(tick_loc, 1-tick_pos);
+            gl.uniform1f(nticks_loc, nticks);
+            gl.uniform1f(nclicks_loc, nclicks);
+            gl.uniform2f(mouse_loc, mouse[0], mouse[1]);
+            gl.drawArrays(gl.TRIANGLES, 0, 6);
+            window.requestAnimationFrame(animate);
+        }
+
+        function init() {
+            cur_time = 0;
+            date_o = new Date();
+            start_time = date_o.getTime();
+            canvas  = document.getElementById("canvas");
+            gl = canvas.getContext("webgl");
+            
+            var verts  = new Float32Array([
+                - 1.0,-1.0, 1.0,-1.0,-1.0, 1.0, 
+                  1.0,-1.0, 1.0, 1.0,-1.0, 1.0
+ 
+            ]);
+
+            buffer = gl.createBuffer();
+            
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+            gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+            
+            var vertSource = document.getElementById("vertex-shader").text;
+            var fragSource = document.getElementById("fragment-shader").text;
+
+            program = spawnShader(gl, vertSource, fragSource);
+            gl.clearColor(0.5, 0.5, 0.5, 1.0);
+            coord_loc = gl.getAttribLocation(program, "coordinates");
+            res_loc = gl.getUniformLocation(program, "resolution");
+            score_loc = gl.getUniformLocation(program, "score");
+            anim_loc = gl.getUniformLocation(program, "anim");
+            tick_loc = gl.getUniformLocation(program, "tick");
+            can_click_loc = gl.getUniformLocation(program, "can_click");
+            nticks_loc = gl.getUniformLocation(program, "nticks");
+            nclicks_loc = gl.getUniformLocation(program, "nclicks");
+            mouse_loc = gl.getUniformLocation(program, "mouse");
+        }
+    </script>        
+    <script id="game">
+        window.onload = function() {
+            init();
+        
+            canvas.addEventListener("mousemove", function(evt) {
+                var rect = canvas.getBoundingClientRect();
+                mouse = [evt.clientX - rect.left, evt.clientY - rect.top];            
+            });
+            window.requestAnimationFrame(animate);
+        }
+        window.addEventListener("click", function() {
+            if (clock > last_click + click_dur) {
+                last_click = clock;
+                clicks += click_size;
+                nclicks += 1;
+            }
+        });
+
+    </script>
+</head>
+
+<body>
+    <canvas id="canvas"></canvas> 
+</body>
