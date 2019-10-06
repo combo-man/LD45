@@ -503,7 +503,7 @@
             int num = int(score * 100.0);
             float wid = font_size*0.5*(log(float(num))/log(2.0));
             int tmp;
-            for (int i = 0; i < 128; i++) {
+            for (int i = 0; i < 32; i++) {
                 if (num == 0) {
                     break;
                 } else {
@@ -539,7 +539,7 @@
             mcoord.y *= -1.0;
             gl_FragColor = vec4(sceneSDF(coord), 1.0);
             gl_FragColor = vec4(mouseAnim(coord, mcoord), 1.0);
-            //gl_FragColor = vec4(scoreAnim(coord), 1.0);
+            gl_FragColor = vec4(scoreAnim(coord), 1.0);
             if (mod(score, 14.0) >  7.0) {
                 gl_FragColor = vec4((vec3(1.0) - gl_FragColor.xyz), 1.0);
             }
