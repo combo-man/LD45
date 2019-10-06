@@ -31,6 +31,21 @@
         uniform vec2 resolution;
         uniform vec2 mouse;
 
+        float ndot(vec2 a, vec2 b) {
+            return a.x*b.x - a.y*b.y;
+        }
+
+        float rand(vec2 sd) {
+            return fract(sin(dot(sd.xy, vec2(12.9898, 78.233))) * 43758.5453);
+        }
+
+        float gold_rand(vec2 co, float seed) {
+            float PHI = 1.61803398874989484820459 * 00000.1;
+            float SQ2 = 1.41421356237309504880169 * 10000.0;
+            float NPI = 3.14159265358979323846264 * 00000.1; 
+            return fract(tan(distance(co*(seed+PHI), vec2(PHI, NPI)))*SQ2);
+        }
+
         int modi(int a, int b) {
             return int(mod(float(a), float(b)));
         }
@@ -86,6 +101,13 @@
 
         float opRounded(float d, float r) {
             return d - r;
+        }
+
+        float rhombusSDF(vec2 p, vec2 b) {
+            vec2 q = abs(p);
+            float h = clamp((-2.0*ndot(q,b)+ndot(b,b))/dot(b,b),-1.0,1.0);
+            float d = length(q - 0.5*b*vec2(1.0-h,1.0+h));
+            return d * sign(q.x*b.y + q.y*b.x - b.x*b.y);
         }
 
         float lineSDF(vec2 p, vec2 a, vec2 b) {
@@ -332,9 +354,53 @@
             }
         }
 
+        vec3 scene5(vec2 p, float score) {
+            vec2 eye_pos = opOff(p, vec2(0.5, 0));
+            vec2 eye_pos_r = opOff(p, vec2(-0.5, 0));
+            int t = modi(int(nticks), 3);
+            float asin = abs(sin(tick*PI));
+            float msin = abs(sin(anim*PI));
+            float mod_l = 0.0;
+            float mod_r = 0.0;
+            if (t == 0) {
+                mod_l = asin;
+                mod_r = 0.0;
+            } else if(t == 1) {
+                mod_l = 0.0;
+                mod_r = asin;
+            } else if(t == 2) {
+                mod_l = asin;
+                mod_r = asin;
+            }
+            float eye_l = vesicaSDF(
+                opRot(eye_pos,PI/2.0),
+                0.25,
+                0.2*mod_l + 0.01);
+            float eye_r = vesicaSDF(
+                opRot(eye_pos_r,PI/2.0),
+                0.25,
+                0.2*mod_r + 0.01);
+
+            float mouth = vesicaSDF(
+                opRot(p, PI/2.0),
+                0.5,
+                0.25*msin + 0.01);
+
+            float d = opUnion(eye_l, eye_r);
+            d = opUnion(d, mouth);
+            if (d < 0.0) {
+                return mix(
+                    vec3(gold_rand(p, nticks*pow(score, 2.0))),
+                    vec3(rand(p*score*PI)),
+                    0.5);
+            } else {
+                return vec3(0.0);
+            }
+        }
+
         vec3 sceneSDF(vec2 p) {
             if (score <= 1.0) {
-                return scene0(p, score);
+                return scene5(p, score);
             } else if (score <= 2.0) {
                 return scene1(p, score - 1.0);
             } else if (score <= 3.0) {
@@ -465,6 +531,7 @@
         function easeOut(t) {
             return 1+(--t)*t*t*t*t;
         }
+
         function animate(t) {
             var width = canvas.clientWidth;
             var height = canvas.clientHeight;
@@ -483,7 +550,7 @@
                 nticks += 1;
             }
 
-           var click_pos = easeOut(Math.min(1, (clock - last_click)/click_dur));
+            var click_pos = easeOut(Math.min(1, (clock - last_click)/click_dur));
             var tick_pos = ease(Math.min(1, (clock - last_tick)/tick_dur));
 
             var click_anim = (clicks - click_size) + click_size * click_pos;
@@ -504,7 +571,6 @@
                 score_loc, 
                 (tick_anim * tick_mod) + (click_anim * click_mod));
 
-            var can_click;
             if (clock >= last_click + click_dur) {
                 can_click = 1;
                 canvas.style.cursor = "pointer";
@@ -571,7 +637,9 @@
             });       
             canvas.addEventListener("mousemove", function(evt) {
                 var rect = canvas.getBoundingClientRect();
-                mouse = [evt.clientX - rect.left, evt.clientY - rect.top];            
+                if(can_click) {
+                    mouse = [evt.clientX - rect.left, evt.clientY - rect.top]; 
+                }
             });
             window.requestAnimationFrame(animate);
         }
