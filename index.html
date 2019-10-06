@@ -20,7 +20,7 @@
         #ifdef GL_ES
             precision highp float; 
         #endif
-        #define PI 3.1415926538
+        #define PI 3.1415926535897932
 
         uniform float anim;
         uniform float tick;
@@ -44,6 +44,10 @@
             float SQ2 = 1.41421356237309504880169 * 10000.0;
             float NPI = 3.14159265358979323846264 * 00000.1; 
             return fract(tan(distance(co*(seed+PHI), vec2(PHI, NPI)))*SQ2);
+        }
+
+        float getFade(float s) {
+            return smoothstep(0.0,0.05,s)*smoothstep(0.0,0.05,1.0-s);
         }
 
         int modi(int a, int b) {
@@ -136,7 +140,7 @@
             j.x = abs(j.x);
             j -= 2.0*min(dot(vec2(-k.x,k.y),j),0.0)*vec2(-k.x,k.y);
             j -= 2.0*min(dot(vec2(k.x,k.y),j),0.0)*vec2(k.x,k.y);
-            j -= vec2(clamp(p.x,-r*k.z,r*k.z),r);
+            j -= vec2(clamp(j.x,-r*k.z,r*k.z),r);
             return length(j)*sign(j.y);
         }
 
@@ -151,6 +155,19 @@
 
         float circleSDF(vec2 p, float r) {
             return length(p) - r;
+        }
+
+        float boxSDF(vec2 p, vec2 b) {
+            vec2 d = abs(p)-b;
+            return length(max(d,vec2(0))) + min(max(d.x,d.y),0.0);
+        }
+
+        float hexagonSDF(vec2 p, float r) {
+            const vec3 k = vec3(-0.866025404, 0.5, 0.577350269);
+            vec2 j = abs(p);
+            j -= 2.0*min(dot(k.xy, j), 0.0) * k.xy;
+            j -= vec2(clamp(j.x, -k.z*r, k.z*r), r);
+            return length(j)*sign(j.y);
         }
 
         float vesicaSDF(vec2 p, float r, float d) {
@@ -199,10 +216,11 @@
             float line = capsuleSDF(line_pos, 0.5, 1.0/16.0);
             float arrow = triSDF(arrow_pos/0.25)*0.25;
             float d = opUnion(line, arrow);
+            float f = smoothstep(0.0, 0.01, 1.0 - score);
             if (modi(int(nclicks), 2) == 0) {
-                return vec3(d < 0.0 ? anim : 1.0 - anim);
+                return vec3(f*(d < 0.0 ? anim : 1.0 - anim));
             } else {
-                return vec3(d < 0.0 ? 1.0 - anim : anim);
+                return vec3(f*(d < 0.0 ? 1.0 - anim : anim));
             }
         }
 
@@ -220,21 +238,21 @@
 
             float d = opUnion(
                 opSub(
-                    octagonSDF(opRot(p, -theta), bsize*3.0),
-                    octagonSDF(opRot(p, theta), bsize*1.5)),
-                octagonSDF(opRot(p, -theta), bsize));
+                    octagonSDF(opRot(p, -theta), bsize*3.0) - 0.1,
+                    octagonSDF(opRot(p, theta), bsize*2.5)) - 0.1,
+                octagonSDF(opRot(p, -theta), bsize) - 0.1);
 
-            d = opSmoothUnion(star, d, 0.25);
+            d = opSmoothUnion(star, d, 0.125);
 
             if (d > 0.0) {
-                return vec3(1.0, 1.0, 1.0);
-            } else if (length(p) <= bsize) {
+                return vec3(1.0, 1.0, getFade(score));
+            } else if (length(p) <= bsize*1.01) {
                 return vec3(0.0, 0.0, 0.0);
             } else {
                 return hsv2rgb(vec3(
                     abs(sin(score*10.0)) + (d*0.25), 
                     0.5 - (d*0.015), 
-                    0.8 - asin*0.125));
+                    (0.8 - asin*0.125)*getFade(score)));
             }
         }
 
@@ -250,10 +268,11 @@
 
             float pupil_left = circleSDF(
                 eye_pos_left, 
-                t*tsin*(can_click > 0  ? 0.25 : 0.1));
+                t*tsin*0.25);
+
             float pupil_right = circleSDF(
                 eye_pos_right, 
-                t*tsin*(can_click > 0 ? 0.25 : 0.1));
+                t*tsin*0.25);
 
             vec2 ves_pos = opOff(opRot(p, PI/2.0), vec2(0.5, 0));
 
@@ -262,7 +281,7 @@
                 min(score*8.0, 1.0), 
                 0.8 - 0.1*asin, 
                 0.125+0.01*tsin);
-            float crag = vesicaSDF(p, max(score - 0.5, 0.0)*16.0, 0.8);
+            float crag = vesicaSDF(p, max(score - 0.35, 0.0), 0.8);
 
             float d = opUnion(
                 mouth,
@@ -274,7 +293,7 @@
             return hsv2rgb(vec3(
                 fin+anim*0.025+tick*0.001, 
                 0.5, 
-                fin < 0.0 ? abs(fin*5.0)*0.75 : 0.0));
+                fin < 0.0 ? getFade(score)*abs(fin*5.0)*0.75 : 0.0));
         }
 
         vec3 scene3(vec2 p, float score) {
@@ -325,7 +344,7 @@
                 0.125 + anim/9.0 + tsin/32.0);
 
             if (d < 0.0) {
-                return hsv2rgb(vec3(h, 0.55, 0.6));
+                return hsv2rgb(vec3(h, 0.55, getFade(score)*0.6));
             } else {
                 return vec3(0.0);
             }
@@ -333,22 +352,25 @@
 
         vec3 scene4(vec2 p, float score) {
             float seek = pow(score, 3.0);
-            float x    = sin(seek*8.0*PI);
+            float x    = sin(seek*16.0*PI);
             vec2 pos = opOff(p, vec2(x, 0.0));
             pos = opRot(pos, seek*PI*6.0);
             float c1 = crossSDF(
                 pos, 
-                vec2(0.6, 1.0 - 0.25*seek*2.0), 
+                vec2(0.6, 1.0 - 0.5*seek*2.0), 
                 0.01);
 
             float c2 = crossSDF(
                 opRot(pos, PI/4.0), 
-                vec2(0.6,1.0 - 0.25*seek*2.0), 
+                vec2(0.6,1.0 - 0.5*seek*2.0), 
                 0.01);
 
-            float d = opSmoothUnion(c1, c2, 0.125);
+            float d = opSmoothUnion(c1, c2, 0.125) - anim*0.1;
             if (d < 0.0) {
-                return hsv2rgb(vec3(mod(d, 0.2), 0.75, 0.75));
+                return hsv2rgb(vec3(
+                    mod(d, 0.2), 
+                    (1.0-anim*0.5)*0.75, 
+                    getFade(score)*0.75));
             } else {
                 return vec3(0.0);
             }
@@ -380,41 +402,89 @@
                 opRot(eye_pos_r,PI/2.0),
                 0.25,
                 0.2*mod_r + 0.01);
+           
+            float pup_l = circleSDF(eye_pos, 0.125);
+            float pup_r = circleSDF(eye_pos_r, 0.125);
 
-            float mouth = vesicaSDF(
-                opRot(p, PI/2.0),
-                0.5,
-                0.25*msin + 0.01);
+            float mouth = rhombusSDF(
+                opOff(p, vec2(0.0, -0.25)),
+                vec2(0.25 + 0.1*anim, 0.1+ 0.2*anim));
 
-            float d = opUnion(eye_l, eye_r);
+            mouth = abs(mouth) - 0.05;
+//          float mouth = vesicaSDF(
+//              opRot(opOff(p,vec2(0.0,-0.25)), PI/2.0),
+//              0.5,
+//              0.25*msin + 0.01);
+
+            float d = opUnion(
+                opSub(eye_l, pup_l), 
+                opSub(eye_r, pup_r));
+
             d = opUnion(d, mouth);
-            if (d < 0.0) {
-                return mix(
-                    vec3(gold_rand(p, nticks*pow(score, 2.0))),
-                    vec3(rand(p*score*PI)),
-                    0.5);
+            float hue = mod(abs(gold_rand(p, nticks*pow(score, 2.0))),1.0);
+            float val = 1.0;
+            if (d > 0.0) {
+                val = smoothstep(0.25, 1.0, score)*smoothstep(
+                    0.0, 
+                    0.25, 
+                    mod(abs(d*10.0), 1.0));
+                hue = 0.0;
+            }
+            val *= getFade(score);
+            return hsv2rgb(vec3(hue, score, val));
+        }
+
+        vec3 scene6(vec2 p, float score) {
+            int n = modi(int(nclicks), 12);
+            float d = 1.0;
+            float r = 0.5*(1.0-anim);
+            vec2 np = opRot(p, tick*PI*2.0);
+            if(n == 1) {
+                d = triSDF(np/r)*r;
+            } else if(n == 3) {
+                d = boxSDF(np, vec2(r, r));
+            } else if(n == 5) {
+                d = pentagonSDF(np, r);
+            } else if(n == 7) {
+                d = hexagonSDF(np, r);
+            } else if(n == 9) {
+                d = octagonSDF(np, r);
+            } else if(n == 11) {
+                d = hexagramSDF(np, r/2.0);
+            }
+            d -= 0.1;
+            vec2 seed = floor((p + vec2(pow(score,3.0)))*128.0)/128.0;
+            float bg = mod(abs(rand(seed)), 1.0);
+            if (d <= 0.0) {
+                return vec3(1.0-0.95*bg)*getFade(score);
             } else {
-                return vec3(0.0);
+                return vec3(bg)*getFade(score);
             }
         }
 
         vec3 sceneSDF(vec2 p) {
-            if (score <= 1.0) {
-                return scene5(p, score);
-            } else if (score <= 2.0) {
-                return scene1(p, score - 1.0);
-            } else if (score <= 3.0) {
-                return scene2(p, score - 2.0);
-            } else if (score <= 3.0) {
-                return scene3(p, score - 3.0);
+            float s = max(score, 0.0);
+            s = mod(s, 7.0);
+            if (s <= 1.0) {
+                return scene0(p, s);
+            } else if (s <= 2.0) {
+                return scene1(p, s - 1.0);
+            } else if (s <= 3.0) {
+                return scene2(p, s - 2.0);
+            } else if (s <= 4.0) {
+                return scene3(p, s - 3.0);
+            } else if (s <= 5.0) {
+                return scene4(p, s - 4.0);
+            } else if (s <= 6.0) {
+                return scene5(p, s - 5.0);
             } else {
-                return scene4(p, score - 4.0);
+                return scene6(p, s - 6.0);
             }
         }
 
         vec3 mouseAnim(vec2 p, vec2 m) {
             vec2 np = opOff(p, m);
-            float mrad = 0.25;
+            float mrad = 0.125;
             float outer = circleSDF(np, mrad);
             float inner = circleSDF(np, mrad - mrad*anim);
             float d = opSub(outer, inner);
@@ -431,12 +501,13 @@
             float cd = 1.0;
             vec2 cp;
             int num = int(score * 100.0);
+            float wid = font_size*0.5*(log(float(num))/log(2.0));
             int tmp;
             for (int i = 0; i < 128; i++) {
                 if (num == 0) {
                     break;
                 } else {
-                    cp = vec2(1.0 - font_size*(float(i)), 1.0-font_size);
+                    cp = vec2(font_size*(float(i-3)-wid), 1.0-font_size*3.0);
                     tmp = modi(num, 2);
                     if (tmp == 0) {
                         cd = circleSDF(
@@ -469,6 +540,9 @@
             gl_FragColor = vec4(sceneSDF(coord), 1.0);
             gl_FragColor = vec4(mouseAnim(coord, mcoord), 1.0);
             gl_FragColor = vec4(scoreAnim(coord), 1.0);
+            if (mod(score, 14.0) >  7.0) {
+                gl_FragColor = vec4((vec3(1.0) - gl_FragColor.xyz), 1.0);
+            }
         }
     </script>
 
@@ -484,12 +558,12 @@
         var clicks = 0;
         var last_tick = 0;
         var tick_dur = 120;
-        var tick_size = 100;
+        var tick_size = 300;
         var click_size = 1;
         var click_dur = 10;
         var last_click = -click_dur;
         var tick_mod = 1/10000.0;
-        var click_mod = 1/300.0;
+        var click_mod = 1/200.0;
         var mouse = [0,0];
         function compileShader(gl, shaderSource, shaderType) {
             var shader = gl.createShader(shaderType);
