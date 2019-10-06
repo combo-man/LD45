@@ -539,7 +539,7 @@
             mcoord.y *= -1.0;
             gl_FragColor = vec4(sceneSDF(coord), 1.0);
             gl_FragColor = vec4(mouseAnim(coord, mcoord), 1.0);
-            gl_FragColor = vec4(scoreAnim(coord), 1.0);
+            //gl_FragColor = vec4(scoreAnim(coord), 1.0);
             if (mod(score, 14.0) >  7.0) {
                 gl_FragColor = vec4((vec3(1.0) - gl_FragColor.xyz), 1.0);
             }
