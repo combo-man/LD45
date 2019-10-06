@@ -31,6 +31,10 @@
         uniform vec2 resolution;
         uniform vec2 mouse;
 
+        int modi(int a, int b) {
+            return int(mod(float(a), float(b)));
+        }
+
         vec3 hsv2rgb(vec3 c) {
             vec4 k = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
             vec3 p = abs(fract(c.xxx + k.xyz) * 6.0 - k.www);
@@ -78,6 +82,21 @@
 
         vec2 opOff(vec2 p, vec2 o) {
             return p - o;
+        }
+
+        float opRounded(float d, float r) {
+            return d - r;
+        }
+
+        float lineSDF(vec2 p, vec2 a, vec2 b) {
+            vec2 pa = p-a;
+            vec2 ba = b-a;
+            float h = clamp(dot(pa,ba)/dot(ba,ba),0.0,1.0);
+            return length(pa - ba*h);
+        }
+
+        float capsuleSDF(vec2 p, float l, float r) {
+            return lineSDF(p, vec2(0, -l), vec2(0, l)) - r;
         }
 
         float hexagramSDF(vec2 p, float r) {
@@ -133,6 +152,36 @@
             float k = max(q.y, q.x);
             vec2 w = (k>0.0) ? q : vec2(b.y-j.x,-k);
             return sign(k) * length(max(w, 0.0)) + r;
+        }
+
+        float triSDF(vec2 p) {
+            const float k = sqrt(3.0);
+            vec2 j = p;
+            j.x = abs(j.x) - 1.0;
+            j.y = j.y + 1.0/k;
+            if (j.x + k*j.y > 0.0) {
+                j = vec2(j.x-k*j.y,-k*j.x-j.y)/2.0;
+            }
+            j.x -= clamp(j.x, -2.0, 0.0);
+            return -length(j)*sign(j.y);
+        }
+
+        vec3 scene0(vec2 p, float score) {
+            float s = score;
+            vec2 line_pos = opOff(
+                opRot(p, 2.0*tick*PI - PI/8.0), 
+                vec2(0.0, -0.25 + 0.25*anim));
+            vec2 arrow_pos = opOff(
+                opRot(p, 2.0*tick*PI - PI/8.0), 
+                vec2(0.0, 0.25 + 0.25*anim));
+            float line = capsuleSDF(line_pos, 0.5, 1.0/16.0);
+            float arrow = triSDF(arrow_pos/0.25)*0.25;
+            float d = opUnion(line, arrow);
+            if (modi(int(nclicks), 2) == 0) {
+                return vec3(d < 0.0 ? anim : 1.0 - anim);
+            } else {
+                return vec3(d < 0.0 ? 1.0 - anim : anim);
+            }
         }
 
         vec3 scene1(vec2 p, float score) {
@@ -284,8 +333,10 @@
         }
 
         vec3 sceneSDF(vec2 p) {
-            if (score <= 1.3) {
-                return scene1(p, score);
+            if (score <= 1.0) {
+                return scene0(p, score);
+            } else if (score <= 2.0) {
+                return scene1(p, score - 1.0);
             } else if (score <= 2.0) {
                 return scene2(p, score - 1.3);
             } else if (score <= 3.0) {
@@ -308,6 +359,40 @@
             }
         }
 
+        vec3 scoreAnim(vec2 p) {
+            float font_size = 0.05;
+            float d = 1.0;
+            float cd = 1.0;
+            vec2 cp;
+            int num = int(score * 100.0);
+            int tmp;
+            for (int i = 0; i < 128; i++) {
+                if (num == 0) {
+                    break;
+                } else {
+                    cp = vec2(1.0 - font_size*(float(i)), 1.0-font_size);
+                    tmp = modi(num, 2);
+                    if (tmp == 0) {
+                        cd = circleSDF(
+                                opOff(p, cp), 
+                                font_size*0.5);
+                    } else {
+                        cd = capsuleSDF(
+                            opOff(p, cp), 
+                            font_size*0.5, 
+                            font_size/4.0);
+                    }
+                    d = opUnion(d, cd);
+                    num /= 2;
+                }
+            }
+            if (d < 0.0) {
+                return vec3(1.0) - gl_FragColor.xyz;
+            } else {
+                return gl_FragColor.xyz;
+            }
+        }
+
         void main() {
             vec2 coord = (gl_FragCoord.xy/resolution.xy)*2.0-1.0;
             vec2 mcoord = (mouse/resolution.xy)*2.0-1.0;
@@ -317,6 +402,7 @@
             mcoord.y *= -1.0;
             gl_FragColor = vec4(sceneSDF(coord), 1.0);
             gl_FragColor = vec4(mouseAnim(coord, mcoord), 1.0);
+            gl_FragColor = vec4(scoreAnim(coord), 1.0);
         }
     </script>
 
@@ -324,6 +410,7 @@
         var program, canvas, gl, buffer, res_loc, score_loc, coord_loc,
             anim_loc, can_click_loc, mouse_loc, start_time, cur_time, date_o;
 
+        var started = false;
         var nticks = 0;
         var nclicks = 0;
         var clock = 0;
@@ -333,10 +420,10 @@
         var tick_dur = 120;
         var tick_size = 100;
         var click_size = 1;
-        var last_click = 0;
         var click_dur = 10;
+        var last_click = -click_dur;
         var tick_mod = 1/10000.0;
-        var click_mod = 1/100.0;
+        var click_mod = 1/300.0;
         var mouse = [0,0];
         function compileShader(gl, shaderSource, shaderType) {
             var shader = gl.createShader(shaderType);
@@ -387,8 +474,9 @@
                 gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
             }
 
-            clock += 1;
-
+            if (started) {
+                clock += 1;
+            }
             if (clock >= last_tick + tick_dur) {
                 ticks += tick_size;
                 last_tick = clock;
@@ -471,21 +559,22 @@
     <script id="game">
         window.onload = function() {
             init();
-        
+            window.addEventListener("click", function() {
+                if (!started) {
+                    started = true;
+                }
+                if (clock > last_click + click_dur) {
+                    last_click = clock;
+                    clicks += click_size;
+                    nclicks += 1;
+                }
+            });       
             canvas.addEventListener("mousemove", function(evt) {
                 var rect = canvas.getBoundingClientRect();
                 mouse = [evt.clientX - rect.left, evt.clientY - rect.top];            
             });
             window.requestAnimationFrame(animate);
         }
-        window.addEventListener("click", function() {
-            if (clock > last_click + click_dur) {
-                last_click = clock;
-                clicks += click_size;
-                nclicks += 1;
-            }
-        });
-
     </script>
 </head>
 
